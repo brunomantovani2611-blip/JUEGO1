@@ -29,6 +29,7 @@ class Cliente:
 	var silla := -1
 	var timer := 0.0
 	var color: Color
+	var sprite := 0        # cual de los dibujos de cliente usa
 
 
 # ---------- ESTADO DEL JUEGO ----------
@@ -42,6 +43,10 @@ var clientes: Array = []
 var textos: Array = []     # textos flotantes "+$5"
 var tiempo_spawn := 1.0
 
+# ---------- DIBUJOS (carpeta res://sprites) ----------
+var tex := {}              # dibujos del local
+var tex_clientes: Array = []
+
 # ---------- INTERFAZ ----------
 var label_dinero: Label
 var btn_caja: Button
@@ -51,7 +56,9 @@ var btn_local: Button
 
 func _ready() -> void:
 	position = Vector2.ZERO   # el dibujo siempre empieza en la esquina
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST   # pixel art nitido
 	randomize()
+	cargar_sprites()
 	agregar_caja()
 	crear_interfaz()
 
@@ -97,6 +104,7 @@ func crear_cliente() -> void:
 	c.pos = PUERTA
 	c.caja = mejor
 	c.color = Color.from_hsv(randf(), 0.6, 0.9)
+	c.sprite = randi() % max(1, tex_clientes.size())
 	cajas[mejor]["cola"].append(c)
 	clientes.append(c)
 
@@ -170,7 +178,7 @@ func actualizar_cajas(delta: float) -> void:
 
 func ganar_dinero(cantidad: int, donde: Vector2) -> void:
 	dinero += cantidad
-	agregar_texto(donde + Vector2(-10, -20), "+$%d" % cantidad, Color(0.1, 0.6, 0.1))
+	agregar_texto(donde + Vector2(-10, -40), "+$%d" % cantidad, Color(0.4, 1.0, 0.4))
 
 
 # =====================================================
@@ -245,70 +253,112 @@ func actualizar_textos(delta: float) -> void:
 
 
 # =====================================================
+#  DIBUJOS: se cargan desde la carpeta res://sprites
+#  Si falta algun archivo, se dibuja una figura simple.
+# =====================================================
+func cargar_sprites() -> void:
+	for nombre in ["caja", "mesa", "silla", "piso", "piso_mesas", "mostrador", "puerta"]:
+		tex[nombre] = cargar("res://sprites/%s.png" % nombre)
+	for i in range(1, 7):
+		var t := cargar("res://sprites/cliente_%d.png" % i)
+		if t != null:
+			tex_clientes.append(t)
+
+func cargar(ruta: String) -> Texture2D:
+	if ResourceLoader.exists(ruta):
+		return load(ruta)
+	return null
+
+func dibujar_centrado(t: Texture2D, centro: Vector2) -> void:
+	draw_texture(t, centro - t.get_size() / 2)
+
+func dibujar_zona(area: Rect2, nombre: String, color: Color) -> void:
+	if tex[nombre] != null:
+		draw_texture_rect(tex[nombre], area, true)   # true = repetir como baldosas
+	else:
+		draw_rect(area, color)
+
+
+# =====================================================
 #  DIBUJO
 # =====================================================
 func _draw() -> void:
 	var fuente := ThemeDB.fallback_font
 
-	# Piso
-	draw_rect(Rect2(0, 0, 1152, 648), Color("#e8d5b7"))
-	# Zona de cajas
-	draw_rect(Rect2(20, 70, 570, 570), Color("#d9c09a"))
-	# Zona de mesas
-	draw_rect(Rect2(610, 70, 530, 570), Color("#cfe0c3"))
+	# Fondo (paredes) y pisos
+	draw_rect(Rect2(0, 0, 1152, 648), Color("#5b3f2e"))
+	dibujar_zona(Rect2(20, 70, 570, 570), "piso", Color("#d9c09a"))
+	dibujar_zona(Rect2(610, 70, 530, 570), "piso_mesas", Color("#cfe0c3"))
+	draw_rect(Rect2(610, 70, 530, 30), Color(0, 0, 0, 0.45))
 	draw_string(fuente, Vector2(620, 92), "ZONA DE MESAS (nivel %d)" % nivel_local,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.2, 0.3, 0.2))
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
 
 	# Mostrador
-	draw_rect(Rect2(40, 85, 530, 50), Color("#7a4b2a"))
+	dibujar_zona(Rect2(40, 85, 530, 50), "mostrador", Color("#7a4b2a"))
 
 	# Cajas
 	for i in cajas.size():
 		var p := posicion_caja(i)
-		draw_rect(Rect2(p - Vector2(25, 20), Vector2(50, 40)), Color("#555555"))
-		draw_rect(Rect2(p - Vector2(15, 12), Vector2(30, 14)), Color("#88e088"))
-		draw_string(fuente, p + Vector2(-20, 34), "Caja %d" % (i + 1),
+		if tex["caja"] != null:
+			dibujar_centrado(tex["caja"], p)
+		else:
+			draw_rect(Rect2(p - Vector2(25, 20), Vector2(50, 40)), Color("#555555"))
+		draw_string(fuente, p + Vector2(-20, 36), "Caja %d" % (i + 1),
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
 		# Barra de progreso del cobro
 		var progreso: float = cajas[i]["timer"] / TIEMPO_COBRO
 		if progreso > 0.0:
-			draw_rect(Rect2(p + Vector2(-25, -32), Vector2(50, 6)), Color.BLACK)
-			draw_rect(Rect2(p + Vector2(-25, -32), Vector2(50 * progreso, 6)), Color.YELLOW)
+			draw_rect(Rect2(p + Vector2(-25, -30), Vector2(50, 6)), Color.BLACK)
+			draw_rect(Rect2(p + Vector2(-25, -30), Vector2(50 * progreso, 6)), Color.YELLOW)
 
 	# Espacios de mesas
 	for i in MAX_NIVEL_LOCAL * MESAS_POR_NIVEL:
 		var p := posicion_mesa(i)
 		var area := Rect2(p - Vector2(75, 55), Vector2(150, 110))
 		if i < mesas.size():
-			# Mesa comprada
-			draw_circle(p, 28, Color("#a0522d"))
+			# Mesa comprada: primero sillas, despues la mesa
 			for s in 2:
-				var color_silla := Color("#5c3317")
-				if mesas[i]["sillas"][s]:
-					color_silla = Color("#3a2010")
-				draw_circle(posicion_silla(i, s), 14, color_silla)
+				if tex["silla"] != null:
+					dibujar_centrado(tex["silla"], posicion_silla(i, s))
+				else:
+					draw_circle(posicion_silla(i, s), 14, Color("#5c3317"))
+			if tex["mesa"] != null:
+				dibujar_centrado(tex["mesa"], p)
+			else:
+				draw_circle(p, 28, Color("#a0522d"))
 		elif i < max_mesas():
 			# Espacio libre para comprar mesa
-			draw_rect(area, Color(0.3, 0.5, 0.3), false, 2.0)
-			draw_string(fuente, p + Vector2(-35, 5), "Libre", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.3, 0.5, 0.3))
+			draw_rect(area, Color(0.2, 0.45, 0.3), false, 3.0)
+			draw_string(fuente, p + Vector2(-20, 5), "Libre", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.15, 0.4, 0.25))
 		else:
 			# Espacio bloqueado (hay que ampliar el local)
-			draw_rect(area, Color(0, 0, 0, 0.25))
-			draw_string(fuente, p + Vector2(-45, 5), "Bloqueado", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.2, 0.2, 0.2))
+			draw_rect(area, Color(0, 0, 0, 0.45))
+			draw_string(fuente, p + Vector2(-42, 5), "Bloqueado", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.9, 0.9, 0.9))
 
 	# Puerta
-	draw_rect(Rect2(260, 632, 80, 16), Color("#4a2c17"))
+	if tex["puerta"] != null:
+		draw_texture(tex["puerta"], Vector2(260, 632))
+	else:
+		draw_rect(Rect2(260, 632, 80, 16), Color("#4a2c17"))
 
-	# Clientes
-	for c in clientes:
-		draw_circle(c.pos, 12, c.color)
-		draw_arc(c.pos, 12, 0, TAU, 20, Color.BLACK, 1.5)
+	# Clientes (los de mas abajo se dibujan encima)
+	var ordenados := clientes.duplicate()
+	ordenados.sort_custom(func(a, b): return a.pos.y < b.pos.y)
+	for c in ordenados:
+		if tex_clientes.size() > 0:
+			var t: Texture2D = tex_clientes[c.sprite]
+			draw_texture(t, c.pos - Vector2(t.get_width() / 2.0, t.get_height() - 12))
+		else:
+			draw_circle(c.pos, 12, c.color)
+			draw_arc(c.pos, 12, 0, TAU, 20, Color.BLACK, 1.5)
 
-	# Textos flotantes
+	# Textos flotantes (con sombra para que se lean)
 	for t in textos:
 		var col: Color = t["color"]
 		col.a = clamp(t["vida"], 0.0, 1.0)
-		draw_string(fuente, t["pos"], t["texto"], HORIZONTAL_ALIGNMENT_LEFT, -1, 20, col)
+		var sombra := Color(0, 0, 0, col.a)
+		draw_string(fuente, t["pos"] + Vector2(2, 2), t["texto"], HORIZONTAL_ALIGNMENT_LEFT, -1, 22, sombra)
+		draw_string(fuente, t["pos"], t["texto"], HORIZONTAL_ALIGNMENT_LEFT, -1, 22, col)
 
 
 # =====================================================
