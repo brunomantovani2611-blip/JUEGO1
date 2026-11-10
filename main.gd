@@ -50,6 +50,7 @@ var btn_local: Button
 
 
 func _ready() -> void:
+	position = Vector2.ZERO   # el dibujo siempre empieza en la esquina
 	randomize()
 	agregar_caja()
 	crear_interfaz()
