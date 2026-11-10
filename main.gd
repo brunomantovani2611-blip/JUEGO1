@@ -45,6 +45,13 @@ const MAX_NIVEL_RECETA := 5     # cada nivel de receta sube el precio un 25%
 # Guardado
 const ARCHIVO_PARTIDA := "user://partida.json"
 const CADA_CUANTO_GUARDAR := 10.0
+
+# Sonido: volumen de cada efecto en decibeles (0 = normal, -10 = mas bajo)
+const VOLUMEN_MUSICA := -12.0
+const SONIDOS := {
+	"cobro": -8.0, "propina": -12.0, "enojado": -8.0, "compra": -6.0,
+	"campanita": -16.0, "obra": -4.0, "logro": -4.0, "click": -10.0,
+}
 const MAX_HORAS_AUSENTE := 1.0  # ganancias offline como maximo de 1 hora
 const RENDIMIENTO_OFFLINE := 0.1   # fuera del juego se gana el 10% de lo normal
 
@@ -101,6 +108,12 @@ var tiempo_spawn := 1.0
 var tiempo_guardado := CADA_CUANTO_GUARDAR
 var no_guardar := false
 
+# ---------- SONIDO ----------
+var reproductores := {}    # nombre -> AudioStreamPlayer
+var musica: AudioStreamPlayer
+var musica_on := true
+var sonido_on := true
+
 # ---------- ANIMACIONES ----------
 var borde_local := IZQUIERDA + ANCHO_CAJAS + ANCHO_COLUMNA   # pared derecha (se anima)
 var alto_patio := 0.0       # el patio aparece de arriba hacia abajo
@@ -121,6 +134,8 @@ var btn_patio: Button
 var btn_cafetera: Button
 var btn_cartel: Button
 var panel_menu: PanelContainer
+var btn_musica: Button
+var btn_sonido: Button
 var filas_menu: Array = []   # por cada producto: { "label": Label, "boton": Button }
 
 
@@ -129,9 +144,12 @@ func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST   # pixel art nitido
 	randomize()
 	cargar_sprites()
+	crear_audio()
 	crear_interfaz()
 	if not cargar_partida():
 		agregar_caja()
+	if musica_on and musica != null:
+		musica.play()
 
 
 # =====================================================
@@ -177,6 +195,58 @@ func tiempo_cobro() -> float:
 
 
 # =====================================================
+#  SONIDO Y MUSICA (archivos en la carpeta res://sonidos)
+# =====================================================
+func crear_audio() -> void:
+	for nombre in SONIDOS:
+		var ruta := "res://sonidos/%s.wav" % nombre
+		if ResourceLoader.exists(ruta):
+			var r := AudioStreamPlayer.new()
+			r.stream = load(ruta)
+			r.volume_db = SONIDOS[nombre]
+			r.max_polyphony = 4      # puede sonar varias veces a la vez
+			add_child(r)
+			reproductores[nombre] = r
+	if ResourceLoader.exists("res://sonidos/musica.ogg"):
+		musica = AudioStreamPlayer.new()
+		musica.stream = load("res://sonidos/musica.ogg")
+		musica.stream.loop = true
+		musica.volume_db = VOLUMEN_MUSICA
+		add_child(musica)
+
+
+func sonar(nombre: String, variacion := 0.0) -> void:
+	# variacion: cambia un poco el tono para que no suene siempre igual
+	if not sonido_on or not reproductores.has(nombre):
+		return
+	var r: AudioStreamPlayer = reproductores[nombre]
+	r.pitch_scale = 1.0 + randf_range(-variacion, variacion)
+	r.play()
+
+
+func cambiar_musica() -> void:
+	musica_on = not musica_on
+	if musica != null:
+		if musica_on:
+			musica.play()
+		else:
+			musica.stop()
+
+
+func cambiar_sonido() -> void:
+	sonido_on = not sonido_on
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Atajos: M = musica, N = sonidos
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_M:
+			cambiar_musica()
+		elif event.keycode == KEY_N:
+			cambiar_sonido()
+
+
+# =====================================================
 #  REPUTACION
 # =====================================================
 func cambiar_reputacion(cuanto: float) -> void:
@@ -217,10 +287,12 @@ func desbloquear_o_mejorar(i: int) -> void:
 		if nivel_local >= p["nivel_local"] and dinero >= p["desbloqueo"]:
 			dinero -= p["desbloqueo"]
 			nivel_receta[p["id"]] = 1
+			sonar("logro")
 			agregar_texto(Vector2(360, 330), "Nuevo en el menu: %s!" % p["nombre"], Color.YELLOW, 2.5)
 	elif nivel < MAX_NIVEL_RECETA and dinero >= costo_mejorar_receta(i):
 		dinero -= costo_mejorar_receta(i)
 		nivel_receta[p["id"]] = nivel + 1
+		sonar("compra")
 
 
 # =====================================================
@@ -241,6 +313,7 @@ func crear_cliente() -> void:
 	if cajas[mejor]["cola"].size() >= MAX_COLA:
 		clientes_perdidos += 1
 		cambiar_reputacion(-0.05)
+		sonar("enojado", 0.1)
 		agregar_texto(PUERTA_AFUERA + Vector2(-60, -40), "Cliente perdido!", Color.RED)
 		return
 
@@ -270,7 +343,9 @@ func actualizar_clientes(delta: float) -> void:
 		var llego: bool = c.pos.distance_to(objetivo) < 2.0
 
 		if llego and not c.camino.is_empty():
-			c.camino.pop_front()
+			var punto: Vector2 = c.camino.pop_front()
+			if punto == PUERTA_ADENTRO and c.estado == "cola":
+				sonar("campanita", 0.05)   # suena la campanita de la puerta al entrar
 			continue
 		var llego_al_final: bool = llego and c.camino.is_empty()
 
@@ -289,6 +364,7 @@ func actualizar_clientes(delta: float) -> void:
 			c.timer -= delta
 			if c.timer <= 0.0:
 				ganar_dinero(PROPINA_SENTADO, c.pos)
+				sonar("propina", 0.1)
 				mesas[c.mesa]["sillas"][c.silla] = false
 				irse(c)
 		elif c.estado == "saliendo" and llego_al_final:
@@ -300,6 +376,7 @@ func enojarse(c: Cliente) -> void:
 	c.enojado = true
 	clientes_perdidos += 1
 	cambiar_reputacion(-0.15)
+	sonar("enojado", 0.1)
 	agregar_texto(c.pos + Vector2(-30, -50), "Me voy!", Color(1, 0.3, 0.3))
 	irse(c)
 
@@ -352,6 +429,7 @@ func tiempo_atencion(c: Cliente) -> float:
 func atender(c: Cliente) -> void:
 	clientes_atendidos += 1
 	ganar_dinero(precio_producto(c.producto), c.pos)
+	sonar("cobro", 0.06)
 	# Si lo atendieron rapido queda contento
 	if c.paciencia > PACIENCIA * 0.5:
 		cambiar_reputacion(0.03)
@@ -404,12 +482,14 @@ func comprar_caja() -> void:
 	if cajas.size() < MAX_CAJAS and dinero >= costo_caja():
 		dinero -= costo_caja()
 		agregar_caja()
+		sonar("compra")
 
 
 func comprar_mesa() -> void:
 	if mesas.size() < max_mesas() and dinero >= costo_mesa():
 		dinero -= costo_mesa()
 		mesas.append({"sillas": [false, false]})
+		sonar("compra", 0.05)
 
 
 func agrandar_local() -> void:
@@ -417,6 +497,7 @@ func agrandar_local() -> void:
 		return
 	dinero -= costo_local()
 	nivel_local += 1
+	sonar("obra")
 	# Animacion: la pared derecha se corre hasta el nuevo tamano
 	empezar_obras()
 	var tw := create_tween()
@@ -434,6 +515,7 @@ func comprar_patio() -> void:
 		return
 	dinero -= COSTO_PATIO
 	tiene_patio = true
+	sonar("obra")
 	# Animacion: el patio aparece de arriba hacia abajo
 	empezar_obras()
 	var tw := create_tween()
@@ -446,6 +528,7 @@ func comprar_cafetera() -> void:
 	if not tiene_cafetera and nivel_local >= 2 and dinero >= COSTO_CAFETERA:
 		dinero -= COSTO_CAFETERA
 		tiene_cafetera = true
+		sonar("logro")
 		agregar_texto(Vector2(60, 200), "Cafetera espresso: cobras mas rapido!", Color.YELLOW, 2.5)
 
 
@@ -453,6 +536,7 @@ func comprar_cartel() -> void:
 	if not tiene_cartel and tiene_patio and dinero >= COSTO_CARTEL:
 		dinero -= COSTO_CARTEL
 		tiene_cartel = true
+		sonar("logro")
 		agregar_texto(Vector2(400, 300), "Cartel luminoso: llegan mas clientes!", Color.YELLOW, 2.5)
 
 
@@ -474,6 +558,8 @@ func guardar_partida() -> void:
 		"cajas": cajas.size(),
 		"mesas": mesas.size(),
 		"recetas": nivel_receta,
+		"musica": musica_on,
+		"sonido": sonido_on,
 		"hora": Time.get_unix_time_from_system(),
 	}
 	var archivo := FileAccess.open(ARCHIVO_PARTIDA, FileAccess.WRITE)
@@ -496,10 +582,13 @@ func cargar_partida() -> bool:
 	tiene_patio = bool(datos.get("patio", false))
 	tiene_cafetera = bool(datos.get("cafetera", false))
 	tiene_cartel = bool(datos.get("cartel", false))
+	musica_on = bool(datos.get("musica", true))
+	sonido_on = bool(datos.get("sonido", true))
 	for i in max(1, int(datos.get("cajas", 1))):
 		agregar_caja()
 	for i in int(datos.get("mesas", 0)):
 		mesas.append({"sillas": [false, false]})
+		sonar("compra", 0.05)
 	var recetas: Dictionary = datos.get("recetas", {})
 	for id in recetas:
 		if nivel_receta.has(id):
@@ -516,6 +605,7 @@ func cargar_partida() -> bool:
 		var ganado := int(segundos * ingreso_por_segundo() * RENDIMIENTO_OFFLINE)
 		if ganado > 0:
 			dinero += ganado
+			sonar("logro")
 			mostrar_mensaje("Bienvenido de vuelta!",
 				"Mientras no estabas (%d minutos)\ntu cafeteria gano $%d" % [int(segundos / 60), ganado])
 	return true
@@ -544,6 +634,7 @@ func empezar_obras() -> void:
 func terminar_obras(mensaje: String) -> void:
 	en_obras = false
 	position = Vector2.ZERO
+	sonar("logro")
 	agregar_texto(Vector2(380, 330), mensaje, Color.YELLOW, 2.5)
 	# Lluvia de polvo final
 	for i in 40:
@@ -852,6 +943,7 @@ func crear_interfaz() -> void:
 
 func crear_boton(padre: Node, accion: Callable) -> Button:
 	var b := Button.new()
+	b.pressed.connect(sonar.bind("click"))
 	b.pressed.connect(accion)
 	padre.add_child(b)
 	return b
@@ -916,6 +1008,8 @@ func crear_panel_menu() -> void:
 	lista.add_child(abajo)
 	var btn_borrar := crear_boton(abajo, confirmar_borrar)
 	btn_borrar.text = "Borrar partida"
+	btn_musica = crear_boton(abajo, cambiar_musica)
+	btn_sonido = crear_boton(abajo, cambiar_sonido)
 	var espacio := Control.new()
 	espacio.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	abajo.add_child(espacio)
@@ -996,6 +1090,8 @@ func actualizar_interfaz() -> void:
 
 	# Panel del menu
 	if panel_menu.visible:
+		btn_musica.text = "Musica: SI (M)" if musica_on else "Musica: NO (M)"
+		btn_sonido.text = "Sonidos: SI (N)" if sonido_on else "Sonidos: NO (N)"
 		for i in PRODUCTOS.size():
 			var p: Dictionary = PRODUCTOS[i]
 			var nivel: int = nivel_receta[p["id"]]
